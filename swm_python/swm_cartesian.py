@@ -8,6 +8,19 @@ from time import perf_counter
 import initial_conditions
 import utils
 import config
+import mpi4py
+from mpi4py import MPI
+
+# ghex branch https://github.com/ghex-org/GHEX/pull/156
+#GHEX_USE_GPU=ON GHEX_GPU_TYPE=NVIDIA CXX=`which g++-12` CUDAHOSTCXX=`which g++-12` pip install -e $(pwd)/../../ghex/bindings/python 
+import ghex
+from ghex import structured as ghex_structured
+from ghex.structured import regular as ghex_regular
+from ghex.structured import grid as ghex_grid
+from ghex import util as ghex_util
+from ghex import context as ghex_context
+from ghex.util import architecture as ghex_architecture
+from ghex.structured.regular import domain_descriptor as ghex_domain_descriptor, halo_generator as ghex_halo_generator, pattern as ghex_pattern, communication_object as ghex_communication_object, field_descriptor as ghex_field_descriptor
 
 I = gtx.Dimension("I")
 J = gtx.Dimension("J")
@@ -17,8 +30,10 @@ dtype = np.float64
 
 cartesian_backend = config.backend
 allocator = gtx.gtfn_cpu
+ghex_arch = ghex_architecture.Architecture.CPU
 if cartesian_backend in ("gt:gpu", "cuda", "dace:gpu"):
     allocator = gtx.gtfn_gpu
+    ghex_arch = ghex_architecture.Architecture.GPU
 
 print(f"Using {cartesian_backend} backend with {allocator.__name__} allocator.")
 
@@ -78,6 +93,11 @@ def copy_3var(inp0: gtscript.Field[dtype], inp1: gtscript.Field[dtype], inp2: gt
         out2 = inp2
 
 
+# def setup_ghex():
+#     comm = ghex.mpi_comm(MPI.COMM_WORLD)
+#     ctx = ghex.context(comm, True)
+#     return ctx
+
 def main():
     dt0 = 0.
     dt1 = 0.
@@ -86,7 +106,32 @@ def main():
     dt25 = 0.
     dt3 = 0.
 
-    
+    mpi_comm = MPI.COMM_WORLD
+    dims = MPI.Compute_dims(mpi_comm.Get_size(), [0, 0, 0])
+    mpi_cart_comm = mpi_comm.Create_cart(dims=dims, periods=[True, True, False])
+    ctx = ghex_context.make_context(mpi_comm, True)
+
+    owned_indices = ghex_grid.UnitRange(0,config.M)*ghex_grid.UnitRange(0,config.N)*ghex_grid.UnitRange(0,1)
+    periodicity = (True, True, False)
+    domain_desc = ghex_domain_descriptor.DomainDescriptor(0, owned_indices)
+
+    p_halos = ((0,1),(0,1),(0,0))
+    p_halo_gen = ghex_halo_generator.HaloGenerator(owned_indices, p_halos, periodicity)
+    p_pattern = ghex_pattern.make_pattern(ctx, p_halo_gen, [domain_desc])
+
+    u_halos = ((1,0), (0,1), (0,0))
+    u_halo_gen = ghex_halo_generator.HaloGenerator(owned_indices, u_halos, periodicity)
+    u_pattern = ghex_pattern.make_pattern(ctx, u_halo_gen, [domain_desc])
+
+    v_halos = ((0,1), (1,0), (0,0))
+    v_halo_gen = ghex_halo_generator.HaloGenerator(owned_indices, v_halos, periodicity)
+    v_pattern = ghex_pattern.make_pattern(ctx, v_halo_gen, [domain_desc])
+
+    z_halos = ((1,0), (1,0), (0,0))
+    z_halo_gen = ghex_halo_generator.HaloGenerator(owned_indices, z_halos, periodicity)
+    z_pattern = ghex_pattern.make_pattern(ctx, z_halo_gen, [domain_desc])
+
+    co = ghex_communication_object.make_communication_object(ctx, u_pattern) # only dimensionality of pattern matters for C++ type
 
     M_LEN = config.M_LEN
     N_LEN = config.N_LEN
@@ -171,24 +216,31 @@ def main():
         t1_stop = perf_counter()
         t15_start = perf_counter()
         dt1 = dt1 + (t1_stop - t1_start)
-        # # Periodic Boundary conditions
-        # try region
-        cu_gt[0, :,0] = cu_gt[M, :,0]
-        # update_boundary(cu_gt, cu_gt, M, N)
+        # Periodic Boundary conditions
 
-        h_gt[M, :,0] = h_gt[0, :,0]
-        cv_gt[M, 1:,0] = cv_gt[0, 1:,0]
-        z_gt[0, 1:,0] = z_gt[M, 1:,0]
+        # cu_gt[0, :,0] = cu_gt[M, :,0]
+        # cu_gt[1:, N,0] = cu_gt[1:, 0,0]
+        # cu_gt[0, N,0] = cu_gt[M, 0,0]
 
-        cv_gt[:, 0,0] = cv_gt[:, N,0]
-        h_gt[:, N,0] = h_gt[:, 0,0]
-        cu_gt[1:, N,0] = cu_gt[1:, 0,0]
-        z_gt[1:, 0,0] = z_gt[1:, N,0]
+        # cv_gt[M, 1:,0] = cv_gt[0, 1:,0]
+        # cv_gt[:, 0,0] = cv_gt[:, N,0]
+        # cv_gt[M, 0,0] = cv_gt[0, N,0]
 
-        cu_gt[0, N,0] = cu_gt[M, 0,0]
-        cv_gt[M, 0,0] = cv_gt[0, N,0]
-        z_gt[0, 0,0] = z_gt[M, N,0]
-        h_gt[M, N,0] = h_gt[0, 0,0]
+        # z_gt[0, 1:,0] = z_gt[M, 1:,0]
+        # z_gt[1:, 0,0] = z_gt[1:, N,0]
+        # z_gt[0, 0,0] = z_gt[M, N,0]
+
+        # h_gt[M, :,0] = h_gt[0, :,0]
+        # h_gt[:, N,0] = h_gt[:, 0,0]
+        # h_gt[M, N,0] = h_gt[0, 0,0]
+
+        cu_ghex = ghex_field_descriptor.make_field_descriptor(domain_desc, cu_gt.ndarray, (1,0,0), (M+1,N+1,1), arch=ghex_arch)
+        cv_ghex = ghex_field_descriptor.make_field_descriptor(domain_desc, cv_gt.ndarray, (0,1,0), (M+1,N+1,1), arch=ghex_arch)
+        z_ghex = ghex_field_descriptor.make_field_descriptor(domain_desc, z_gt.ndarray, (1,1,0), (M+1,N+1,1), arch=ghex_arch)
+        h_ghex = ghex_field_descriptor.make_field_descriptor(domain_desc, h_gt.ndarray, (0,0,0), (M+1,N+1,1), arch=ghex_arch)
+
+        res = co.exchange([u_pattern(cu_ghex), v_pattern(cv_ghex), z_pattern(z_ghex), p_pattern(h_ghex)])
+        res.wait()
 
         t15_stop = perf_counter()
         dt15 = dt15 + (t15_stop - t15_start)
@@ -238,16 +290,23 @@ def main():
         dt2 = dt2 + (t2_stop - t2_start)
 
         # Periodic Boundary conditions
-        unew_gt[0, :,0] = unew_gt[M, :,0]
-        pnew_gt[M, :,0] = pnew_gt[0, :,0]
-        vnew_gt[M, 1:,0] = vnew_gt[0, 1:,0]
-        unew_gt[1:, N,0] = unew_gt[1:, 0,0]
-        vnew_gt[:, 0,0] = vnew_gt[:, N,0]
-        pnew_gt[:, N,0] = pnew_gt[:, 0,0]
+        # unew_gt[0, :,0] = unew_gt[M, :,0]
+        # pnew_gt[M, :,0] = pnew_gt[0, :,0]
+        # vnew_gt[M, 1:,0] = vnew_gt[0, 1:,0]
+        # unew_gt[1:, N,0] = unew_gt[1:, 0,0]
+        # vnew_gt[:, 0,0] = vnew_gt[:, N,0]
+        # pnew_gt[:, N,0] = pnew_gt[:, 0,0]
 
-        unew_gt[0, N,0] = unew_gt[M, 0,0]
-        vnew_gt[M, 0,0] = vnew_gt[0, N,0]
-        pnew_gt[M, N,0] = pnew_gt[0, 0,0]
+        # unew_gt[0, N,0] = unew_gt[M, 0,0]
+        # vnew_gt[M, 0,0] = vnew_gt[0, N,0]
+        # pnew_gt[M, N,0] = pnew_gt[0, 0,0]
+        
+        u_ghex = ghex_field_descriptor.make_field_descriptor(domain_desc, unew_gt.ndarray, (1,0,0), (M+1,N+1,1), arch=ghex_arch)
+        v_ghex = ghex_field_descriptor.make_field_descriptor(domain_desc, vnew_gt.ndarray, (0,1,0), (M+1,N+1,1), arch=ghex_arch)
+        p_ghex = ghex_field_descriptor.make_field_descriptor(domain_desc, pnew_gt.ndarray, (0,0,0), (M+1,N+1,1), arch=ghex_arch)
+
+        res = co.exchange([u_pattern(u_ghex), v_pattern(v_ghex), p_pattern(p_ghex)])
+        res.wait()
 
         t25_stop = perf_counter()
         dt25 = dt25 + (t25_stop - t25_start)
