@@ -13,3 +13,7 @@ FetchContent_MakeAvailable(gridtools)
 add_executable(swm_gridtools swm_gridtools.cpp)
 target_link_libraries(swm_gridtools GridTools::stencil_cpu_ifirst)
 target_compile_features(swm_gridtools PRIVATE cxx_std_20)
+
+add_executable(swm_gridtools_lr_halo swm_gridtools_lr_halo.cpp)
+target_link_libraries(swm_gridtools_lr_halo GridTools::stencil_cpu_ifirst)
+target_compile_features(swm_gridtools_lr_halo PRIVATE cxx_std_20)

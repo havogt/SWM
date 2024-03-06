@@ -46,21 +46,21 @@ auto read_uvp(int step, std::string const &suffix, std::size_t M,
 }
 
 auto verify_uvp(auto const &u, auto const &v, auto const &p, std::size_t M,
-                std::size_t N, int step, std::string const &suffix) {
+                std::size_t N, int step, std::string const &suffix,
+                std::array<std::array<std::size_t, 2>, 2> u_halo = {},
+                std::array<std::array<std::size_t, 2>, 2> v_halo = {},
+                std::array<std::array<std::size_t, 2>, 2> p_halo = {}) {
   auto [u_ref, v_ref, p_ref] = read_uvp(step, suffix, M, N);
 
-  if (!gridtools::verify_data_store(
-          u_ref, u, std::array{std::array{0, 0}, std::array{0, 0}})) {
+  if (!gridtools::verify_data_store(u_ref, u, u_halo)) {
     std::cout << "in u" << std::endl;
     return false;
   }
-  if (!gridtools::verify_data_store(
-          v_ref, v, std::array{std::array{0, 0}, std::array{0, 0}})) {
+  if (!gridtools::verify_data_store(v_ref, v, v_halo)) {
     std::cout << "in v" << std::endl;
     return false;
   }
-  if (!gridtools::verify_data_store(
-          p_ref, p, std::array{std::array{0, 0}, std::array{0, 0}})) {
+  if (!gridtools::verify_data_store(p_ref, p, p_halo)) {
     std::cout << "in p" << std::endl;
     return false;
   }
@@ -69,7 +69,11 @@ auto verify_uvp(auto const &u, auto const &v, auto const &p, std::size_t M,
 
 auto verify_cucvzh(auto const &cu, auto const &cv, auto const &z, auto const &h,
                    std::size_t M, std::size_t N, int step,
-                   std::string const &suffix) {
+                   std::string const &suffix,
+                   std::array<std::array<std::size_t, 2>, 2> cu_halo = {},
+                   std::array<std::array<std::size_t, 2>, 2> cv_halo = {},
+                   std::array<std::array<std::size_t, 2>, 2> z_halo = {},
+                   std::array<std::array<std::size_t, 2>, 2> h_halo = {}) {
   auto cu_ref = read_from_file(
       ("ref/cu.step" + std::to_string(step) + "." + suffix + ".bin").c_str(), M,
       N);
@@ -83,23 +87,19 @@ auto verify_cucvzh(auto const &cu, auto const &cv, auto const &z, auto const &h,
       ("ref/h.step" + std::to_string(step) + "." + suffix + ".bin").c_str(), M,
       N);
 
-  if (!gridtools::verify_data_store(
-          cu_ref, cu, std::array{std::array{0, 0}, std::array{0, 0}})) {
+  if (!gridtools::verify_data_store(cu_ref, cu, cu_halo)) {
     std::cout << "in cu" << std::endl;
     return false;
   }
-  if (!gridtools::verify_data_store(
-          cv_ref, cv, std::array{std::array{0, 0}, std::array{0, 0}})) {
+  if (!gridtools::verify_data_store(cv_ref, cv, cv_halo)) {
     std::cout << "in cv" << std::endl;
     return false;
   }
-  if (!gridtools::verify_data_store(
-          z_ref, z, std::array{std::array{0, 0}, std::array{0, 0}})) {
+  if (!gridtools::verify_data_store(z_ref, z, z_halo)) {
     std::cout << "in z" << std::endl;
     return false;
   }
-  if (!gridtools::verify_data_store(
-          h_ref, h, std::array{std::array{0, 0}, std::array{0, 0}})) {
+  if (!gridtools::verify_data_store(h_ref, h, h_halo)) {
     std::cout << "in h" << std::endl;
     return false;
   }

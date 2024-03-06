@@ -1,5 +1,6 @@
 #include "config.hpp"
 
+#include "gridtools/common/halo_descriptor.hpp"
 #include "initial_conditions.hpp"
 #include "verify.hpp"
 #include <gridtools/common/defs.hpp>
@@ -30,68 +31,30 @@ namespace st = gt::stencil;
   FALSE // if true we check also the halo which is included in the verification
         // files (from shallow_swap.c)
 
-void u_boundary(auto &u) {
-  int M = u->lengths()[0] - 1;
-  int N = u->lengths()[1] - 1;
+void boundary(auto &u) {
+  int M = u->lengths()[0] - 2;
+  int N = u->lengths()[1] - 2;
   auto u_v = u->host_view();
-  for (std::size_t j = 0; j < N; ++j) {
+  for (std::size_t j = 1; j < N + 1; ++j) {
     u_v(0, j) = u_v(M, j);
+    u_v(M + 1, j) = u_v(1, j);
   }
-  for (std::size_t i = 0; i < M; ++i) {
-    u_v(i + 1, N) = u_v(i + 1, 0);
+  for (std::size_t i = 1; i < M + 1; ++i) {
+    u_v(i, N + 1) = u_v(i, 1);
+    u_v(i, 0) = u_v(i, N);
   }
-  u_v(0, N) = u_v(M, 0);
-}
-
-void v_boundary(auto &v) {
-  int M = v->lengths()[0] - 1;
-  int N = v->lengths()[1] - 1;
-  auto v_v = v->host_view();
-  for (std::size_t j = 0; j < N; ++j) {
-    v_v(M, j + 1) = v_v(0, j + 1);
-  }
-
-  for (std::size_t i = 0; i < M; ++i) {
-    v_v(i, 0) = v_v(i, N);
-  }
-
-  v_v(M, 0) = v_v(0, N);
-}
-
-void p_boundary(auto &p) {
-  int M = p->lengths()[0] - 1;
-  int N = p->lengths()[1] - 1;
-  auto p_v = p->host_view();
-  for (std::size_t j = 0; j < N; ++j) {
-    p_v(M, j) = p_v(0, j);
-  }
-
-  for (std::size_t i = 0; i < M; ++i) {
-    p_v(i, N) = p_v(i, 0);
-  }
-
-  p_v(M, N) = p_v(0, 0);
-}
-
-void z_boundary(auto &z) {
-  int M = z->lengths()[0] - 1;
-  int N = z->lengths()[1] - 1;
-  auto z_v = z->host_view();
-  for (std::size_t j = 0; j < N; ++j) {
-    z_v(0, j + 1) = z_v(M, j + 1);
-  }
-  for (std::size_t i = 0; i < M; ++i) {
-    z_v(i + 1, 0) = z_v(i + 1, N);
-  }
-  z_v(0, 0) = z_v(M, N);
+  u_v(0, 0) = u_v(M, N);
+  u_v(M + 1, 0) = u_v(1, N);
+  u_v(M + 1, N + 1) = u_v(1, 1);
+  u_v(0, N + 1) = u_v(M, 1);
 }
 
 struct calc_cucvzh {
   using fsdx = st::cartesian::in_accessor<0>;
   using fsdy = st::cartesian::in_accessor<1>;
-  using u = st::cartesian::in_accessor<2, st::extent<-1, 0, 0, 1>>;
-  using v = st::cartesian::in_accessor<3, st::extent<0, 1, -1, 0>>;
-  using p = st::cartesian::in_accessor<4, st::extent<0, 1, 0, 1>>;
+  using u = st::cartesian::in_accessor<2, st::extent<0, 1, -1, 0>>;
+  using v = st::cartesian::in_accessor<3, st::extent<-1, 0, 0, 1>>;
+  using p = st::cartesian::in_accessor<4, st::extent<-1, 1, -1, 1>>;
   using cu = st::cartesian::inout_accessor<5>;
   using cv = st::cartesian::inout_accessor<6>;
   using z = st::cartesian::inout_accessor<7>;
@@ -100,16 +63,16 @@ struct calc_cucvzh {
   using param_list = st::make_param_list<fsdx, fsdy, u, v, p, cu, cv, z, h>;
 
   template <class Eval> GT_FUNCTION static void apply(Eval &&eval) {
-    eval(cu{}) = 0.5 * (eval(p{1, 0, 0}) + eval(p{})) * eval(u{});
-    eval(cv{}) = 0.5 * (eval(p{0, 1, 0}) + eval(p{})) * eval(v{});
-    eval(z{}) =
-        ((eval(fsdx{}) * (eval(v{1, 0, 0}) - eval(v{}))) -
-         eval(fsdy{}) * (eval(u{0, 1, 0}) - eval(u{}))) /
-        (eval(p{1, 1, 0}) + eval(p{0, 1, 0}) + eval(p{}) + eval(p{1, 0, 0}));
+    eval(cu{}) = 0.5 * (eval(p{}) + eval(p{-1, 0, 0})) * eval(u{});
+    eval(cv{}) = 0.5 * (eval(p{}) + eval(p{0, -1, 0})) * eval(v{});
+    eval(z{}) = ((eval(fsdx{}) * (eval(v{}) - eval(v{-1, 0, 0}))) -
+                 eval(fsdy{}) * (eval(u{}) - eval(u{0, -1, 0}))) /
+                (eval(p{-1, -1, 0}) + eval(p{0, -1, 0}) + eval(p{}) +
+                 eval(p{-1, 0, 0}));
     eval(h{}) =
         eval(p{}) +
-        0.25 * (eval(u{-1, 0, 0}) * eval(u{-1, 0, 0}) + eval(u{}) * eval(u{}) +
-                eval(v{0, -1, 0}) * eval(v{0, -1, 0}) + eval(v{}) * eval(v{}));
+        0.25 * (eval(u{1, 0, 0}) * eval(u{1, 0, 0}) + eval(u{}) * eval(u{}) +
+                eval(v{0, 1, 0}) * eval(v{0, 1, 0}) + eval(v{}) * eval(v{}));
   }
 };
 
@@ -120,10 +83,10 @@ struct calc_uvp {
   using uold = st::cartesian::in_accessor<3>;
   using vold = st::cartesian::in_accessor<4>;
   using pold = st::cartesian::in_accessor<5>;
-  using cu = st::cartesian::in_accessor<6, st::extent<-1, 0, 0, 1>>;
-  using cv = st::cartesian::in_accessor<7, st::extent<0, 1, -1, 0>>;
-  using z = st::cartesian::in_accessor<8, st::extent<-1, 0, -1, 0>>;
-  using h = st::cartesian::in_accessor<9, st::extent<0, 1, 0, 1>>;
+  using cu = st::cartesian::in_accessor<6, st::extent<-1, 1, -1, 1>>;
+  using cv = st::cartesian::in_accessor<7, st::extent<-1, 1, -1, 1>>;
+  using z = st::cartesian::in_accessor<8, st::extent<-1, 1, -1, 1>>;
+  using h = st::cartesian::in_accessor<9, st::extent<-1, 1, -1, 1>>;
   using unew = st::cartesian::inout_accessor<10>;
   using vnew = st::cartesian::inout_accessor<11>;
   using pnew = st::cartesian::inout_accessor<12>;
@@ -133,18 +96,18 @@ struct calc_uvp {
 
   template <class Eval> GT_FUNCTION static void apply(Eval &&eval) {
     eval(unew{}) = eval(uold{}) +
-                   eval(tdts8{}) * (eval(z{}) + eval(z{0, -1, 0})) *
-                       (eval(cv{1, 0, 0}) + eval(cv{}) + eval(cv{0, -1, 0}) +
-                        eval(cv{1, -1, 0})) -
-                   eval(tdtsdx{}) * (eval(h{1, 0, 0}) - eval(h{}));
+                   eval(tdts8{}) * (eval(z{0, 1, 0}) + eval(z{})) *
+                       (eval(cv{0, 1, 0}) + eval(cv{}) + eval(cv{-1, 1, 0}) +
+                        eval(cv{-1, 0, 0})) -
+                   eval(tdtsdx{}) * (eval(h{}) - eval(h{-1, 0, 0}));
     eval(vnew{}) = eval(vold{}) -
-                   eval(tdts8{}) * (eval(z{}) + eval(z{-1, 0, 0})) *
-                       (eval(cu{-1, 0, 0}) + eval(cu{-1, 1, 0}) + eval(cu{}) +
-                        eval(cu{0, 1, 0})) -
-                   eval(tdtsdy{}) * (eval(h{0, 1, 0}) - eval(h{}));
+                   eval(tdts8{}) * (eval(z{1, 0, 0}) + eval(z{})) *
+                       (eval(cu{1, 0, 0}) + eval(cu{1, -1, 0}) + eval(cu{}) +
+                        eval(cu{0, -1, 0})) -
+                   eval(tdtsdy{}) * (eval(h{}) - eval(h{0, -1, 0}));
     eval(pnew{}) = eval(pold{}) -
-                   eval(tdtsdx{}) * (eval(cu{}) - eval(cu{-1, 0, 0})) -
-                   eval(tdtsdy{}) * (eval(cv{}) - eval(cv{0, -1, 0}));
+                   eval(tdtsdx{}) * (eval(cu{1, 0, 0}) - eval(cu{})) -
+                   eval(tdtsdy{}) * (eval(cv{0, 1, 0}) - eval(cv{}));
   }
 };
 
@@ -185,17 +148,11 @@ struct copy {
 };
 
 int main() {
-#if VAL_WITH_HALO
-  std::array<std::array<std::size_t, 2>, 2> u_halo_verify = {};
-  std::array<std::array<std::size_t, 2>, 2> v_halo_verify = {};
-  std::array<std::array<std::size_t, 2>, 2> p_halo_verify = {};
-  std::array<std::array<std::size_t, 2>, 2> z_halo_verify = {};
-#else
-  std::array<std::array<std::size_t, 2>, 2> u_halo_verify = {{{1, 0}, {0, 1}}};
-  std::array<std::array<std::size_t, 2>, 2> v_halo_verify = {{{0, 1}, {1, 0}}};
-  std::array<std::array<std::size_t, 2>, 2> p_halo_verify = {{{0, 1}, {0, 1}}};
-  std::array<std::array<std::size_t, 2>, 2> z_halo_verify = {{{1, 0}, {1, 0}}};
-#endif
+  std::array<std::array<std::size_t, 2>, 2> u_halo_verify = {{{1, 1}, {1, 1}}};
+  std::array<std::array<std::size_t, 2>, 2> v_halo_verify = {{{1, 1}, {1, 1}}};
+  std::array<std::array<std::size_t, 2>, 2> p_halo_verify = {{{1, 1}, {1, 1}}};
+  std::array<std::array<std::size_t, 2>, 2> z_halo_verify = {{{1, 1}, {1, 1}}};
+
   double dx = 100000.;
   double dy = 100000.;
   double a = 1000000.;
@@ -206,12 +163,13 @@ int main() {
   double fsdy = 4. / dy;
 
   auto storage_builder =
-      gt::storage::builder<storage_traits_t>.dimensions(MM + 1, NN + 1).type<double>();
+      gt::storage::builder<storage_traits_t>.dimensions(MM + 2, NN + 2).type<double>();
 
   auto [u, v, p] = initial_conditions(storage_builder, MM, NN, dx, dy, a);
 
-  auto grid = st::make_grid(MM, NN, 1);
-  auto full_grid = st::make_grid(MM + 1, NN + 1, 1);
+  auto grid = st::make_grid(gt::halo_descriptor(1, 1, 1, MM, MM + 2),
+                            gt::halo_descriptor(1, 1, 1, NN, NN + 2), 1);
+  auto full_grid = st::make_grid(MM + 2, NN + 2, 1);
 
   auto copy_spec = [](auto in, auto out) {
     return st::execute_parallel().stage(copy(), in, out);
@@ -274,19 +232,13 @@ int main() {
     }
 
     st::run(calc_cucvzh_spec, stencil_backend_t(), grid,
-            st::global_parameter(fsdx), st::global_parameter(fsdy),
-            gt::sid::shift_sid_origin(u, u_origin),
-            gt::sid::shift_sid_origin(v, v_origin),
-            gt::sid::shift_sid_origin(p, p_origin),
-            gt::sid::shift_sid_origin(cu, u_origin),
-            gt::sid::shift_sid_origin(cv, v_origin),
-            gt::sid::shift_sid_origin(z, z_origin),
-            gt::sid::shift_sid_origin(h, p_origin));
+            st::global_parameter(fsdx), st::global_parameter(fsdy), u, v, p, cu,
+            cv, z, h);
 
-    u_boundary(cu);
-    v_boundary(cv);
-    p_boundary(h);
-    z_boundary(z);
+    boundary(cu);
+    boundary(cv);
+    boundary(h);
+    boundary(z);
 
     if (VAL_DEEP && step <= 1) {
       if (verify_cucvzh(cu, cv, z, h, MM, NN, step, "t100", u_halo_verify,
@@ -302,21 +254,12 @@ int main() {
 
     st::run(calc_uvp_spec, stencil_backend_t(), grid,
             st::global_parameter(tdts8), st::global_parameter(tdtsdx),
-            st::global_parameter(tdtsdy),
-            gt::sid::shift_sid_origin(uold, u_origin),
-            gt::sid::shift_sid_origin(vold, v_origin),
-            gt::sid::shift_sid_origin(pold, p_origin),
-            gt::sid::shift_sid_origin(cu, u_origin),
-            gt::sid::shift_sid_origin(cv, v_origin),
-            gt::sid::shift_sid_origin(z, z_origin),
-            gt::sid::shift_sid_origin(h, p_origin),
-            gt::sid::shift_sid_origin(unew, u_origin),
-            gt::sid::shift_sid_origin(vnew, v_origin),
-            gt::sid::shift_sid_origin(pnew, p_origin));
+            st::global_parameter(tdtsdy), uold, vold, pold, cu, cv, z, h, unew,
+            vnew, pnew);
 
-    u_boundary(unew);
-    v_boundary(vnew);
-    p_boundary(pnew);
+    boundary(unew);
+    boundary(vnew);
+    boundary(pnew);
 
     if (VAL_DEEP && step <= 1) {
       if (verify_uvp(unew, vnew, pnew, MM, NN, step, "t200", u_halo_verify,
