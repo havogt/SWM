@@ -93,7 +93,7 @@ def _timestep(
     vold: IJField,
     pold: IJField,
     alpha: dtype,
-):
+) -> tuple[IJField, IJField, IJField, IJField, IJField, IJField]:
     cu = avg_x(p) * u
     cv = avg_y(p) * v
     z = (delta_x(dx, v) - delta_y(dy, u)) / avg_x(avg_y(p))

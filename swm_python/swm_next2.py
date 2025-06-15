@@ -315,6 +315,8 @@ def main():
             offset_provider={},
         )
 
+        if hasattr(u_gt.array_ns, "cuda"):
+            u_gt.array_ns.cuda.runtime.deviceSynchronize()
         t1_stop = perf_counter()
         t15_start = perf_counter()
         dt1 = dt1 + (t1_stop - t1_start)
@@ -380,6 +382,8 @@ def main():
             offset_provider={},
         )
 
+        if hasattr(u_gt.array_ns, "cuda"):
+            u_gt.array_ns.cuda.runtime.deviceSynchronize()
         t2_stop = perf_counter()
         t25_start = perf_counter()
         dt2 = dt2 + (t2_stop - t2_start)
@@ -448,6 +452,8 @@ def main():
                 jend=N + 1,
                 offset_provider={},
             )
+            if hasattr(u_gt.array_ns, "cuda"):
+                u_gt.array_ns.cuda.runtime.deviceSynchronize()
             # swap
             u_gt, unew_gt = unew_gt, u_gt
             v_gt, vnew_gt = vnew_gt, v_gt
