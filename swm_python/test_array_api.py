@@ -256,6 +256,75 @@ def test_jax_jit():
     print("  PASSED\n")
 
 
+def test_torch_compile():
+    """Test that the timestep function works under torch.compile.
+
+    Wraps the core timestep in torch.compile and verifies it produces the same
+    results as the non-compiled version.
+    """
+    print("=" * 60)
+    print("TEST: torch.compile")
+    print("=" * 60)
+
+    import torch
+    from array_api_compat import array_namespace
+
+    M, N, ITMAX = 16, 16, 100
+
+    test_arr = torch.zeros((1,), dtype=torch.float64)
+    xp = array_namespace(test_arr)
+
+    dx = 100000.0
+    dy = 100000.0
+    a = 1000000.0
+    dt_val = 90.0
+    alpha = 0.001
+
+    u, v, p = swm_array_api.initialize_2halo(xp, M, N, dx, dy, a)
+    uold = xp.asarray(u, copy=True)
+    vold = xp.asarray(v, copy=True)
+    pold = xp.asarray(p, copy=True)
+
+    # Create a compiled version of the timestep
+    compiled_timestep = torch.compile(
+        lambda u, v, p, uold, vold, pold, dt_val, alpha_val: swm_array_api.timestep(
+            xp, u, v, p, uold, vold, pold,
+            dx, dy, dt_val, alpha_val, M, N
+        )
+    )
+
+    # Run simulation with compiled timestep
+    for ncycle in range(ITMAX):
+        tdt = dt_val if ncycle == 0 else dt_val * 2.0
+        alpha_val = alpha if ncycle > 0 else 0.0
+
+        unew, vnew, pnew, uold, vold, pold = compiled_timestep(
+            u, v, p, uold, vold, pold, tdt, alpha_val
+        )
+        u = unew
+        v = vnew
+        p = pnew
+
+    # Compare against non-compiled numpy reference
+    u_np, v_np, p_np = _run_simulation(np, M, N, ITMAX)
+
+    u_diff = np.max(np.abs(np.asarray(u_np) - np.asarray(u)))
+    v_diff = np.max(np.abs(np.asarray(v_np) - np.asarray(v)))
+    p_diff = np.max(np.abs(np.asarray(p_np) - np.asarray(p)))
+
+    print(f"  u max diff vs numpy: {u_diff}")
+    print(f"  v max diff vs numpy: {v_diff}")
+    print(f"  p max diff vs numpy: {p_diff}")
+
+    tol = 1e-10
+    assert u_diff < tol, f"u difference too large: {u_diff}"
+    assert v_diff < tol, f"v difference too large: {v_diff}"
+    assert p_diff < tol, f"p difference too large: {p_diff}"
+
+    print("  torch.compile compilation and execution successful")
+    print("  PASSED\n")
+
+
 def test_cross_backend_consistency():
     """Test that numpy, jax, and torch produce identical results."""
     print("=" * 60)
@@ -320,6 +389,7 @@ def main():
         ("torch validation", test_torch),
         ("strict compliance", test_strict_compliance),
         ("jax.jit compilation", test_jax_jit),
+        ("torch.compile", test_torch_compile),
         ("cross-backend consistency", test_cross_backend_consistency),
     ]
 

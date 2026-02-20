@@ -14,6 +14,8 @@ Usage:
   python swm_array_api.py --array-library torch
   python swm_array_api.py --array-library cupy
   python swm_array_api.py --strict             # validate compliance with array_api_strict wrapping
+  python swm_array_api.py --array-library jax --compile    # run with jax.jit
+  python swm_array_api.py --array-library torch --compile  # run with torch.compile
 """
 
 import argparse
@@ -351,6 +353,11 @@ def main():
     parser.add_argument("--ITMAX", type=int, default=4000)
     parser.add_argument("--validate", action="store_true", help="Validate against reference data")
     parser.add_argument("--validate-deep", action="store_true", help="Deep validation of each step")
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Enable JIT compilation (jax.jit for jax, torch.compile for torch)",
+    )
     parser.add_argument("--no-output", action="store_true", help="Suppress diagnostic output")
     args = parser.parse_args()
 
@@ -429,6 +436,22 @@ def main():
         sys.path.insert(0, "/home/user/SWM/swm_python")
         import utils
 
+    # Set up the timestep function, optionally with JIT compilation
+    def timestep_fn(u, v, p, uold, vold, pold, dt_val, alpha_val):
+        return timestep(xp, u, v, p, uold, vold, pold, dx, dy, dt_val, alpha_val, M, N)
+
+    if args.compile:
+        if args.array_library == "jax":
+            import jax
+            timestep_fn = jax.jit(timestep_fn)
+            print("JIT compilation enabled via jax.jit")
+        elif args.array_library == "torch":
+            import torch
+            timestep_fn = torch.compile(timestep_fn)
+            print("JIT compilation enabled via torch.compile")
+        else:
+            print(f"Warning: --compile has no effect for {args.array_library}")
+
     dt_total = 0.0
     dt_compute = 0.0
 
@@ -453,8 +476,8 @@ def main():
         alpha_val = alpha if ncycle > 0 else 0.0
 
         t_start = perf_counter()
-        unew, vnew, pnew, uold, vold, pold = timestep(
-            xp, u, v, p, uold, vold, pold, dx, dy, tdt, alpha_val, M, N
+        unew, vnew, pnew, uold, vold, pold = timestep_fn(
+            u, v, p, uold, vold, pold, tdt, alpha_val
         )
         t_stop = perf_counter()
         dt_compute += t_stop - t_start
