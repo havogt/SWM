@@ -16,6 +16,8 @@ Usage:
   python swm_array_api.py --strict             # validate compliance with array_api_strict wrapping
   python swm_array_api.py --array-library jax --compile    # run with jax.jit
   python swm_array_api.py --array-library torch --compile  # run with torch.compile
+  python swm_array_api.py --array-library torch --compile --device cuda  # torch.compile on GPU
+  python swm_array_api.py --array-library jax --compile --device cpu     # jax.jit on CPU
 """
 
 import argparse
@@ -42,6 +44,18 @@ def _get_array_module(name):
         return array_api_strict
     else:
         raise ValueError(f"Unknown array library: {name}")
+
+
+def _to_numpy(arr):
+    """Convert array to numpy, handling GPU/CUDA tensors."""
+    import numpy as np
+    try:
+        import torch
+        if isinstance(arr, torch.Tensor):
+            return arr.detach().cpu().numpy()
+    except ImportError:
+        pass
+    return np.asarray(arr)
 
 
 def initialize_interior(xp, M, N, dx, dy, a):
@@ -298,6 +312,13 @@ def main():
         help="Enable JIT compilation (jax.jit for jax, torch.compile for torch)",
     )
     parser.add_argument("--no-output", action="store_true", help="Suppress diagnostic output")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        choices=["cpu", "cuda"],
+        help="Device to run on (default: CPU for numpy/torch, GPU for jax if available)",
+    )
     args = parser.parse_args()
 
     M = args.M
@@ -316,8 +337,20 @@ def main():
     if args.array_library == "jax":
         import jax
         jax.config.update("jax_enable_x64", True)
+        if args.device is not None:
+            jax_device_kind = "gpu" if args.device == "cuda" else "cpu"
+            jax.config.update("jax_default_device", jax.devices(jax_device_kind)[0])
+            print(f"JAX device: {jax_device_kind}")
 
     lib = _get_array_module(args.array_library)
+
+    # Configure torch device
+    if args.array_library == "torch" and args.device is not None:
+        import torch
+        torch.set_default_device(args.device)
+        print(f"Torch device: {args.device}")
+    elif args.device == "cuda" and args.array_library not in ("jax", "torch", "cupy"):
+        print(f"Warning: --device cuda not supported for {args.array_library}")
 
     if args.strict:
         import array_api_strict
@@ -402,9 +435,9 @@ def main():
 
         if args.validate_deep and ncycle <= 3:
             import numpy as np
-            u_np = np.asarray(u)
-            v_np = np.asarray(v)
-            p_np = np.asarray(p)
+            u_np = _to_numpy(u)
+            v_np = _to_numpy(v)
+            p_np = _to_numpy(p)
             # Convert 2-halo to reference layout
             utils.validate_uvp(
                 u_np[:-1, 1:], v_np[1:, :-1], p_np[1:, 1:],
@@ -425,6 +458,13 @@ def main():
         v = vnew
         p = pnew
 
+    # Synchronize device for accurate timing
+    if args.array_library == "jax":
+        u.block_until_ready()
+    elif args.array_library == "torch" and args.device == "cuda":
+        import torch
+        torch.cuda.synchronize()
+
     t0_stop = perf_counter()
     dt_total = t0_stop - t0_start
 
@@ -436,9 +476,9 @@ def main():
 
     if args.validate:
         import numpy as np
-        u_np = np.asarray(u)
-        v_np = np.asarray(v)
-        p_np = np.asarray(p)
+        u_np = _to_numpy(u)
+        v_np = _to_numpy(v)
+        p_np = _to_numpy(p)
 
         # Convert to reference layout for validation
         u_ref_layout = u_np[:-1, 1:]
