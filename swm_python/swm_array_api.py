@@ -74,43 +74,32 @@ def initialize_interior(xp, M, N, dx, dy, a):
     return u, v, p
 
 
+def _interior_to_halo(xp, interior):
+    """Build (M+2, N+2) array from (M, N) interior with periodic halos.
+
+    Wraps the interior periodically: last col -> left halo, first col -> right halo,
+    last row -> top halo, first row -> bottom halo.
+    """
+    M, N = interior.shape
+
+    # Wrap columns: [last_col | interior | first_col]
+    left_col = interior[:, N - 1:N]   # (M, 1)
+    right_col = interior[:, 0:1]       # (M, 1)
+    middle_rows = xp.concat([left_col, interior, right_col], axis=1)  # (M, N+2)
+
+    # Wrap rows: [last_row | middle | first_row]
+    top_row = middle_rows[M - 1:M, :]    # (1, N+2)
+    bottom_row = middle_rows[0:1, :]      # (1, N+2)
+    return xp.concat([top_row, middle_rows, bottom_row], axis=0)  # (M+2, N+2)
+
+
 def apply_periodic_halo(xp, interior, x):
     """Apply periodic boundary conditions by filling the halo from the interior.
 
     The array x has shape (M+2, N+2) where the interior is x[1:-1, 1:-1].
     The halos are filled by wrapping around the interior periodically.
-
-    Args:
-        xp: array namespace
-        interior: slice for the interior, just used for documentation
-        x: the field array of shape (M+2, N+2)
-
-    Returns:
-        New array with halos filled periodically.
     """
-    M_plus_2 = x.shape[0]
-    N_plus_2 = x.shape[1]
-    M = M_plus_2 - 2
-    N = N_plus_2 - 2
-
-    # Build the periodically-wrapped array from scratch.
-    # Interior rows: x[1:-1, :] with wrapped columns
-    # Then wrap top/bottom rows.
-
-    # Extract the interior
-    core = x[1:-1, 1:-1]  # (M, N)
-
-    # Build columns: [last_col | core | first_col]
-    left_col = core[:, N - 1:N]  # (M, 1) - last column wraps to left halo
-    right_col = core[:, 0:1]      # (M, 1) - first column wraps to right halo
-    middle_rows = xp.concat([left_col, core, right_col], axis=1)  # (M, N+2)
-
-    # Build top and bottom halo rows from middle_rows
-    top_row = middle_rows[M - 1:M, :]    # (1, N+2) - last row wraps to top
-    bottom_row = middle_rows[0:1, :]      # (1, N+2) - first row wraps to bottom
-
-    result = xp.concat([top_row, middle_rows, bottom_row], axis=0)  # (M+2, N+2)
-    return result
+    return _interior_to_halo(xp, x[1:-1, 1:-1])
 
 
 def timestep(xp, u, v, p, uold, vold, pold, dx, dy, dt_val, alpha_val, M, N):
@@ -182,38 +171,20 @@ def timestep(xp, u, v, p, uold, vold, pold, dx, dy, dt_val, alpha_val, M, N):
     avg_ys_vv = 0.5 * (vv[1:M + 1, 0:N] + vv[1:M + 1, 1:N + 1])
     h_interior = p[1:M + 1, 1:N + 1] + 0.5 * (avg_xs_uu + avg_ys_vv)
 
-    # Embed cu, cv, z, h into (M+2, N+2) arrays and apply periodicity
-    cu_full = xp.zeros_like(u)
-    cv_full = xp.zeros_like(v)
-    z_full = xp.zeros_like(u)
-    h_full = xp.zeros_like(p)
-
-    # Set interior values via constructing new arrays
-    # Since some array APIs don't support item assignment, we build from scratch
-    cu_full = _set_interior(xp, cu_full, cu_interior, M, N)
-    cv_full = _set_interior(xp, cv_full, cv_interior, M, N)
-    z_full = _set_interior(xp, z_full, z_interior, M, N)
-    h_full = _set_interior(xp, h_full, h_interior, M, N)
-
-    # Apply periodic halos to intermediate fields
-    cu_full = apply_periodic_halo(xp, None, cu_full)
-    cv_full = apply_periodic_halo(xp, None, cv_full)
-    z_full = apply_periodic_halo(xp, None, z_full)
-    h_full = apply_periodic_halo(xp, None, h_full)
+    # Embed cu, cv, z, h into (M+2, N+2) arrays with periodic halos
+    cu_full = _interior_to_halo(xp, cu_interior)
+    cv_full = _interior_to_halo(xp, cv_interior)
+    z_full = _interior_to_halo(xp, z_interior)
+    h_full = _interior_to_halo(xp, h_interior)
 
     # -- Step 2: compute new u, v, p --
 
     # unew = uold + avg_y_staggered(z)*avg_y_staggered(avg_x(cv))*dt - delta_x(h)*dt
     # avg_y_staggered(z) = 0.5*(z[i,j-1] + z[i,j])
     avg_ys_z = 0.5 * (z_full[1:M + 1, 0:N] + z_full[1:M + 1, 1:N + 1])
-    # avg_x(cv) = 0.5*(cv[i+1,j] + cv[i,j])
-    avg_x_cv = 0.5 * (cv_full[2:M + 2, 1:N + 1] + cv_full[1:M + 1, 1:N + 1])
-    # But we need avg_y_staggered(avg_x(cv)) -- need avg_x(cv) with halo too
-    # Let's compute avg_x(cv) on full domain first, then take staggered avg
-    avg_x_cv_full = xp.zeros_like(u)
+    # avg_x(cv) = 0.5*(cv[i+1,j] + cv[i,j]), then avg_y_staggered needs halo
     avg_x_cv_interior = 0.5 * (cv_full[2:M + 2, 1:N + 1] + cv_full[1:M + 1, 1:N + 1])
-    avg_x_cv_full = _set_interior(xp, avg_x_cv_full, avg_x_cv_interior, M, N)
-    avg_x_cv_full = apply_periodic_halo(xp, None, avg_x_cv_full)
+    avg_x_cv_full = _interior_to_halo(xp, avg_x_cv_interior)
     avg_ys_avg_x_cv = 0.5 * (avg_x_cv_full[1:M + 1, 0:N] + avg_x_cv_full[1:M + 1, 1:N + 1])
 
     # delta_x(h) = (1/dx)*(h[i+1,j] - h[i,j])
@@ -227,11 +198,9 @@ def timestep(xp, u, v, p, uold, vold, pold, dx, dy, dt_val, alpha_val, M, N):
 
     # vnew = vold - avg_x_staggered(z)*avg_x_staggered(avg_y(cu))*dt - delta_y(h)*dt
     avg_xs_z = 0.5 * (z_full[0:M, 1:N + 1] + z_full[1:M + 1, 1:N + 1])
-    # avg_y(cu) on full domain
-    avg_y_cu_full = xp.zeros_like(u)
+    # avg_y(cu) = 0.5*(cu[i,j+1] + cu[i,j]), then avg_x_staggered needs halo
     avg_y_cu_interior = 0.5 * (cu_full[1:M + 1, 2:N + 2] + cu_full[1:M + 1, 1:N + 1])
-    avg_y_cu_full = _set_interior(xp, avg_y_cu_full, avg_y_cu_interior, M, N)
-    avg_y_cu_full = apply_periodic_halo(xp, None, avg_y_cu_full)
+    avg_y_cu_full = _interior_to_halo(xp, avg_y_cu_interior)
     avg_xs_avg_y_cu = 0.5 * (avg_y_cu_full[0:M, 1:N + 1] + avg_y_cu_full[1:M + 1, 1:N + 1])
 
     # delta_y(h) = (1/dy)*(h[i,j+1] - h[i,j])
@@ -252,9 +221,9 @@ def timestep(xp, u, v, p, uold, vold, pold, dx, dy, dt_val, alpha_val, M, N):
     )
 
     # Build full arrays with halos
-    unew = _build_with_halo(xp, u, unew_interior, M, N)
-    vnew = _build_with_halo(xp, v, vnew_interior, M, N)
-    pnew = _build_with_halo(xp, p, pnew_interior, M, N)
+    unew = _interior_to_halo(xp, unew_interior)
+    vnew = _interior_to_halo(xp, vnew_interior)
+    pnew = _interior_to_halo(xp, pnew_interior)
 
     # -- Step 3: time filter (update old fields) --
     uold_new_interior = (
@@ -270,47 +239,17 @@ def timestep(xp, u, v, p, uold, vold, pold, dx, dy, dt_val, alpha_val, M, N):
         + alpha_val * (pnew[1:M + 1, 1:N + 1] - 2.0 * p[1:M + 1, 1:N + 1] + pold[1:M + 1, 1:N + 1])
     )
 
-    uold_new = _build_with_halo(xp, uold, uold_new_interior, M, N)
-    vold_new = _build_with_halo(xp, vold, vold_new_interior, M, N)
-    pold_new = _build_with_halo(xp, pold, pold_new_interior, M, N)
+    uold_new = _interior_to_halo(xp, uold_new_interior)
+    vold_new = _interior_to_halo(xp, vold_new_interior)
+    pold_new = _interior_to_halo(xp, pold_new_interior)
 
     return unew, vnew, pnew, uold_new, vold_new, pold_new
-
-
-def _set_interior(xp, full_arr, interior, M, N):
-    """Return a new array where the interior [1:M+1, 1:N+1] is set to `interior`.
-
-    Uses only standard Array API operations (concat/stack) to avoid in-place mutation.
-    """
-    # Build the result row by row using concat.
-    # Top halo row (row 0): zeros
-    top_row = full_arr[0:1, :]  # (1, N+2)
-    # Bottom halo row (row M+1): zeros
-    bottom_row = full_arr[M + 1:M + 2, :]  # (1, N+2)
-
-    # Middle rows: [halo_left | interior_row | halo_right]
-    left_col = full_arr[1:M + 1, 0:1]    # (M, 1) - left halo zeros
-    right_col = full_arr[1:M + 1, N + 1:N + 2]  # (M, 1) - right halo zeros
-    middle = xp.concat([left_col, interior, right_col], axis=1)  # (M, N+2)
-
-    return xp.concat([top_row, middle, bottom_row], axis=0)  # (M+2, N+2)
-
-
-def _build_with_halo(xp, template, interior, M, N):
-    """Build a full (M+2, N+2) array from interior values and apply periodic halo."""
-    full = xp.zeros_like(template)
-    full = _set_interior(xp, full, interior, M, N)
-    return apply_periodic_halo(xp, None, full)
 
 
 def initialize_2halo(xp, M, N, dx, dy, a):
     """Initialize fields with 2-halo (1 on each side) symmetric padding."""
     u, v, p = initialize_interior(xp, M, N, dx, dy, a)
-    # Apply periodic halo by building (M+2, N+2) arrays
-    u_full = _build_with_halo(xp, xp.zeros((M + 2, N + 2), dtype=xp.float64), u, M, N)
-    v_full = _build_with_halo(xp, xp.zeros((M + 2, N + 2), dtype=xp.float64), v, M, N)
-    p_full = _build_with_halo(xp, xp.zeros((M + 2, N + 2), dtype=xp.float64), p, M, N)
-    return u_full, v_full, p_full
+    return _interior_to_halo(xp, u), _interior_to_halo(xp, v), _interior_to_halo(xp, p)
 
 
 def to_reference_layout(arr, M, N):
