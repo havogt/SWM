@@ -424,6 +424,18 @@ def main():
         else:
             print(f"Warning: --compile has no effect for {args.array_library}")
 
+        # Warm-up call to trigger compilation before timing
+        print("Warm-up call...", end=" ", flush=True)
+        t_warmup_start = perf_counter()
+        _warmup_result = timestep_fn(u, v, p, uold, vold, pold, dt, 0.0)
+        if args.array_library == "jax":
+            _warmup_result[0].block_until_ready()
+        elif args.array_library == "torch" and args.device == "cuda":
+            torch.cuda.synchronize()
+        t_warmup_stop = perf_counter()
+        del _warmup_result
+        print(f"done ({t_warmup_stop - t_warmup_start:.3f}s)")
+
     dt_total = 0.0
     dt_compute = 0.0
 
